@@ -228,9 +228,9 @@ export default function HeartbeatAI() {
           { label: 'α COUPLING', value: alpha.toFixed(4),       unit: 'H→R',  color: '#1affb2' },
           { label: 'β COUPLING', value: beta.toFixed(4),        unit: 'R→H',  color: '#ff6b35' },
         ].map(v => (
-          <div key={v.label} className="border border-[#0a3a3a] bg-[#050d0d] p-4 flex flex-col gap-1">
+          <div key={v.label} className="border border-[#0a3a3a] bg-[#050d0d] p-4 flex flex-col gap-1 overflow-hidden">
             <span className="text-[10px] tracking-[0.2em] text-[#0a7a5a]">{v.label}</span>
-            <span className="text-3xl font-bold" style={{ color: v.color }}>{v.value}</span>
+            <span className="text-xl sm:text-2xl font-bold truncate w-full block" style={{ color: v.color }}>{v.value}</span>
             <span className="text-[10px] text-[#0a5a4a]">{v.unit}</span>
           </div>
         ))}
