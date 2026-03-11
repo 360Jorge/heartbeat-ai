@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import * as ort from 'onnxruntime-web';
 
 const SCALER_MEAN  = [0.42705773003349545, -0.02785356216022533, 0.2763273670815389, -0.257906840741695, 0.5];
 const SCALER_SCALE = [1.5404885159821033,   1.5712256600666719,  1.3129388280146943,  1.3378783590515275, 0.3415650255319866];
@@ -16,6 +17,8 @@ export default function HeartbeatAI() {
   const animRef     = useRef(null);
   const lastApiCall = useRef(0);
 
+  const ortSessionRef = useRef(null);
+
   const [stress, setStress]     = useState(0);
   const [alpha, setAlpha]       = useState(0.1);
   const [beta, setBeta]         = useState(0.05);
@@ -27,37 +30,42 @@ export default function HeartbeatAI() {
   const DT   = 0.02;
   const STEPS_PER_FRAME = 3;
 
-  // Load WASM
+  // Load ONNX session alongside WASM
   useEffect(() => {
-    async function loadWasm() {
-      try {
-        const mod = await import('../public/wasm/vdp_wasm.js');
-        await mod.default('/wasm/vdp_wasm_bg.wasm');
-        wasmRef.current = mod;
-        setLoaded(true);
-        setStatus('Running');
-      } catch (e) {
-        setStatus('WASM error: ' + e.message);
+      async function loadModels() {
+          try {
+              const mod = await import('../public/wasm/vdp_wasm.js');
+              await mod.default('/wasm/vdp_wasm_bg.wasm');
+              wasmRef.current = mod;
+
+              ort.env.wasm.wasmPaths = '/';
+              ort.env.wasm.numThreads = 1;
+              const session = await ort.InferenceSession.create('/coupling_controller.onnx');
+              ortSessionRef.current = session;
+
+              setLoaded(true);
+              setStatus('Running');
+          } catch (e) {
+              setStatus('Error: ' + e.message);
+          }
       }
-    }
-    loadWasm();
+      loadModels();
   }, []);
 
-  // Fetch coupling from AI controller
-  const fetchCoupling = useCallback(async (state, stressVal) => {
-    try {
-      const res = await fetch('/api/controller', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...state, stress: stressVal }),
-      });
-      const data = await res.json();
-      if (data.alpha !== undefined) {
-        couplingRef.current = { alpha: data.alpha, beta: data.beta };
-        setAlpha(+data.alpha.toFixed(4));
-        setBeta(+data.beta.toFixed(4));
+  const runInference = useCallback(async (state, stressVal) => {
+      if (!ortSessionRef.current) return;
+      try {
+          const raw = [state.x1, state.y1, state.x2, state.y2, stressVal];
+          const scaled = raw.map((v, i) => (v - SCALER_MEAN[i]) / SCALER_SCALE[i]);
+          const tensor = new ort.Tensor('float32', Float32Array.from(scaled), [1, 5]);
+          const results = await ortSessionRef.current.run({ state: tensor });
+          const [alpha, beta] = results.coupling.data;
+          couplingRef.current = { alpha, beta };
+          setAlpha(+alpha.toFixed(3));
+          setBeta(+beta.toFixed(3));
+      } catch (e) {
+          console.error('Inference error:', e);
       }
-    } catch (_) {}
   }, []);
 
   // Draw waveform
@@ -195,8 +203,8 @@ export default function HeartbeatAI() {
       // Call AI controller every ~30 frames
       frameCount++;
       if (frameCount % 30 === 0) {
-        fetchCoupling(stateRef.current, stress);
-        estimateBPM(historyRef.current.heart);
+          runInference(stateRef.current, stress);
+          estimateBPM(historyRef.current.heart);
       }
 
       animRef.current = requestAnimationFrame(loop);
@@ -204,7 +212,7 @@ export default function HeartbeatAI() {
 
     animRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animRef.current);
-  }, [loaded, stress, fetchCoupling]);
+  }, [loaded, stress, runInference]);
 
   return (
     <main className="min-h-screen bg-[#030a0a] text-[#1affb2] font-mono p-6 flex flex-col gap-6">
